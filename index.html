@@ -1,0 +1,720 @@
+<!DOCTYPE HTML>
+
+<html>
+
+<head>
+
+	<!-- jquery -->
+	<script src="http://code.jquery.com/jquery-1.10.2.min.js"></script>
+
+	<!-- glMatrix library -->
+	<script type="text/javascript" src="gl-matrix/dist/gl-matrix-min.js"></script>
+
+	<script type="text/javascript" src="dimensions.js"></script>
+	<script type="text/javascript" src="helper.js"></script>
+	<script type="text/javascript" src="point.js"></script>
+	<script type="text/javascript" src="keyboard.js"></script>
+	<script type="text/javascript" src="room.js"></script>
+	<script type="text/javascript" src="wall.js"></script>
+	<script type="text/javascript" src="mesh.js"></script>
+	<script type="text/javascript" src="wallMesh.js"></script>
+	<script type="text/javascript" src="DoorMesh.js"></script>
+	<script type="text/javascript" src="floorMesh.js"></script>
+	<script type="text/javascript" src="floorHighlightMesh.js"></script>
+	<script type="text/javascript" src="unitMesh.js"></script>
+
+	<!-- STAGE DATA -->
+	<script type="text/javascript" src="stage_2.js"></script>
+	
+
+	<!-- SHADERS -->
+	<script id="shader-fs" type="x-shader/x-fragment">
+
+		precision mediump float;
+		varying vec4 vColor;
+
+		void main(void){
+			gl_FragColor = vColor;
+		}
+
+	</script>
+
+	<script id="shader-vs" type="x-shader/x-vertex">
+
+		attribute vec3 aVertexPosition;
+		attribute vec4 aVertexColor;
+		uniform mat4 uMVMatrix;
+		uniform mat4 uPMatrix;
+		varying vec4 vColor;
+
+		void main(void){
+			gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+			vColor = aVertexColor;
+		}
+
+	</script>
+
+	<script type="text/javascript">
+
+		// TODO:
+		// Make Unit class
+		// Units move on their own
+		// Units check which block they are on and see if they can continue moving
+		// Units stop at walls and doors
+		// Units can be selected and given directions
+
+		// ============================================
+		// GAME STATE
+		// ============================================
+		keyboard.setDebug(true);
+
+		var selectedRow = 0;
+		var selectedColumn = 0;
+
+		// ============================================
+		// MESH
+		// ============================================
+		var wallMesh = null;
+		var doorMesh = null;
+		var floorMesh = null;
+		var floorHighlightMesh = null;
+		var unitMesh = null;
+
+		function loadMeshes(){
+
+			wallMesh = createMesh(
+				wallMeshInfo.vertexList,
+				wallMeshInfo.colorList,
+				wallMeshInfo.triangleList
+			);
+
+			doorMesh = createMesh(
+				doorMeshInfo.vertexList,
+				doorMeshInfo.colorList,
+				doorMeshInfo.triangleList
+			);
+
+			floorMesh = createMesh(
+				floorMeshInfo.vertexList,
+				floorMeshInfo.colorList,
+				floorMeshInfo.triangleList
+			);
+
+			floorHighlightMesh = createMesh(
+				floorHighlightMeshInfo.vertexList,
+				floorHighlightMeshInfo.colorList,
+				floorHighlightMeshInfo.triangleList
+			);
+
+			unitMesh = createMesh(
+				unitMeshInfo.vertexList,
+				unitMeshInfo.colorList,
+				unitMeshInfo.triangleList
+			);
+
+		};
+
+
+		var gl = null;
+		var fov = 90.0;
+	 	var cameraPosition = [0.0, 0.0, -1000.0];
+		var swivelRotation = [0.9, 0.0, 0.0];
+
+		// ============================================
+		// WebGL
+		// ============================================
+		function initGL(canvas){
+			try{
+				gl = canvas.getContext("experimental-webgl");
+				gl.viewportWidth = canvas.width;
+				gl.viewportHeight = canvas.height;
+			}catch(e){
+			
+			}
+			if(!gl){
+				alert("Could not initialise WebGL, sorry :-(");
+			}
+		};
+
+		// ============================================
+		// Shaders
+		// ============================================
+		function getShader(gl, id){
+			var shaderScript = document.getElementById(id);
+			if(!shaderScript){
+				return null;
+			}
+			var str = "";
+			var k = shaderScript.firstChild;
+			while(k){
+				if(k.nodeType == 3){
+					str += k.textContent;
+				}
+				k = k.nextSibling;
+			}
+			var shader;
+			if(shaderScript.type == "x-shader/x-fragment"){
+				shader = gl.createShader(gl.FRAGMENT_SHADER);
+			}else if(shaderScript.type == "x-shader/x-vertex"){
+				shader = gl.createShader(gl.VERTEX_SHADER);
+			}else{
+				return null;
+			}
+			gl.shaderSource(shader, str);
+			gl.compileShader(shader);
+			if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)){
+				alert(gl.getShaderInfoLog(shader));
+				return null;
+			}
+			return shader;
+		};
+
+		var shaderProgram;
+
+		function initShaders(){
+			var fragmentShader = getShader(gl, "shader-fs");
+			var vertexShader = getShader(gl, "shader-vs");
+			shaderProgram = gl.createProgram();
+			gl.attachShader(shaderProgram, vertexShader);
+			gl.attachShader(shaderProgram, fragmentShader);
+			gl.linkProgram(shaderProgram);
+
+			if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)){
+				alert("Could not initialize shaders");
+			}
+
+			gl.useProgram(shaderProgram);
+			shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+			gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+			shaderProgram.vertexColorAttribute = gl.getAttribLocation(shaderProgram, "aVertexColor");
+			gl.enableVertexAttribArray(shaderProgram.vertexColorAttribute);
+			shaderProgram.pMatrixUniform = gl.getUniformLocation(shaderProgram, "uPMatrix");
+			shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+		};
+
+		// ============================================
+		// DEBUG
+		// ============================================
+		var EDIT_MODE = false;
+
+		// ============================================
+		// WALLS
+		// ============================================
+
+// 		var wallList = [];
+		var wallList = stageWalls;
+
+		function buildWall(column, row, offset){
+			
+			var existingWall = getWallAtCoords(column, row, offset);
+
+			if(existingWall){
+				var type = existingWall.getType();
+				type += 1;
+				if(type === NUM_WALL_TYPES){
+					removeWall(existingWall);
+				}else{
+					existingWall.setType(type);
+				}
+				return;
+			}else{
+				wallList.push(
+					createWall(column, row, offset, WALL_TYPE_NORMAL)
+				);
+			}
+		};
+
+		function removeWall(wall){
+			for(w in wallList){
+				if(wall === wallList[w]){
+					wallList.splice(w, 1);
+					return;
+				}
+			}
+		};
+
+		function getWallAtCoords(column, row, offset){
+
+			for(w in wallList){
+				if(
+					all([
+						wallList[w].getCoords()[0] === column,
+						wallList[w].getCoords()[1] === row,
+						wallList[w].getOffset() === offset
+					])
+				){
+					return wallList[w];
+				}
+			}
+		
+			return null;
+		}
+
+		// ============================================
+		// ROOMS
+		// ============================================
+
+		var roomList = [];
+
+		(function makeRooms(){
+
+			var row = MIN_GRID_LIMIT;
+			var column = MIN_GRID_LIMIT;
+
+			for(var r = 0; r < NUM_ROOMS; r++){
+
+				roomList[r] = createRoom(column, row, ROOM_TYPE_BLANK);
+				
+				column += 1;
+				if(column > MAX_GRID_LIMIT){
+					row += 1;
+					column = MIN_GRID_LIMIT;
+				}
+			}
+
+		})();
+
+		makeStageRooms();
+
+		function buildRoom(column, row){
+			
+			var existingRoom = getRoomAtCoords(column, row);
+			if(existingRoom.getType() === ROOM_TYPE_BLANK){
+				existingRoom.setType(ROOM_TYPE_NORMAL);
+			}else{
+				existingRoom.setType(ROOM_TYPE_BLANK);
+			}
+		};
+
+		function getRoomAtCoords(column, row){
+			var normalizedColumn = column + MAX_GRID_LIMIT;
+			var normalizedRow = row + MAX_GRID_LIMIT;
+			return roomList[(normalizedRow * NUM_COLUMNS) + normalizedColumn];
+		};
+
+		// ============================================
+		// Matrices
+		// ============================================
+
+		// Move
+		var mvMatrix = mat4.create();
+		var mvMatrixStack = [];
+
+		// Perspective
+		var pMatrix = mat4.create();
+		mat4.ortho(pMatrix, -400.0, 400.0, -300.0, 300.0, 0.1, 10000);
+
+		function mvPushMatrix(){
+			var copy = mat4.clone(mvMatrix);
+			mvMatrixStack.push(copy);
+		}
+
+		function mvPopMatrix(){
+			if (mvMatrixStack.length == 0){
+				throw "Invalid popMatrix!";
+			}
+			mvMatrix = mvMatrixStack.pop();
+		}
+
+		function setMatrixUniforms(){
+			gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+			gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+		}
+
+		// ============================================
+		// Mouse Controls
+		// ============================================
+		
+		var lastMousePosition = [0.0, 0.0];
+		var mouseIsDown = false;
+
+		function onMouseMove(e)
+		{
+			if(!mouseIsDown)
+				return;
+
+			if(!keyboard.getKey("32"))
+				return;
+
+			var currentMousePosition = getMouseCoords(e);
+			var xDif = lastMousePosition[0] - currentMousePosition[0];
+			var yDif = lastMousePosition[1] - currentMousePosition[1];
+
+			// Rotate camera swivel
+			swivelRotation[0] -= yDif * 0.0015;
+			swivelRotation[1] -= xDif * 0.0015;
+			lastMousePosition = currentMousePosition;
+		};
+
+		function onMouseDown(e)
+		{
+			mouseIsDown = true;
+			lastMousePosition = getMouseCoords(e);
+		};
+
+		function onMouseUp(e)
+		{
+			mouseIsDown = false;
+		};
+
+		function onMouseWheel(e)
+		{
+			var wheelDelta = e.wheelDelta;
+			wheelDelta *= 0.01;
+			cameraPosition[2] += wheelDelta;
+		};
+
+		function getMouseCoords(e)
+		{
+			var posx = 0;
+			var posy = 0;
+			if(!e) var e = window.event;
+			if(e.pageX && e.pageY)
+			{
+				if(e.pageX || e.pageY)
+				{
+					posx = e.pageX;
+					posy = e.pageY;
+				}
+			}
+			else if(e.clientX || e.clientY)
+			{
+				posx = e.clientX + document.body.scrollLeft + document.documentElement.scrollLeft;
+				posy = e.clientY + document.body.scrollTop + document.documentElement.scrollTop;
+			}
+			
+			return [posx, posy];
+		};
+
+		function webGLStart(){
+
+			var canvas = document.getElementById("canvas");
+			initGL(canvas);
+			initShaders();
+
+			loadMeshes();
+
+			gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+			gl.clearColor(0.0, 0.0, 0.0, 0.0);
+			gl.enable(gl.DEPTH_TEST);
+
+			mainLoop();
+			
+		};
+
+		function mainLoop(){
+
+			// Set timeout
+			setTimeout( 'mainLoop()', 33 );
+
+			// Keyboard Controls
+			if(keyboard.getPress(37)){
+				selectedColumn -= 1;
+			}else if(keyboard.getPress(38)){
+				selectedRow -= 1;
+			}else if(keyboard.getPress(39)){
+				selectedColumn += 1;
+			}else if(keyboard.getPress(40)){
+				selectedRow += 1;
+			}
+
+			// Wrap selection
+			if(selectedRow < MIN_GRID_LIMIT){
+				selectedRow = MAX_GRID_LIMIT;
+			}else if(selectedRow > MAX_GRID_LIMIT){
+				selectedRow = MIN_GRID_LIMIT;
+			}
+
+			if(selectedColumn < MIN_GRID_LIMIT){
+				selectedColumn = MAX_GRID_LIMIT;
+			}else if(selectedColumn > MAX_GRID_LIMIT){
+				selectedColumn = MIN_GRID_LIMIT;
+			}
+
+			// Toggle edit mode (e)
+			if(keyboard.getPress(69)){
+				if(EDIT_MODE){
+					EDIT_MODE = false;
+				}else{
+					EDIT_MODE = true;
+				}
+			}
+
+			// Build walls and floors
+			if(EDIT_MODE){
+				// 1-4 to build walls
+				if(keyboard.getPress(49)){
+					buildWall(selectedColumn, selectedRow, WALL_OFFSET_LEFT);
+				}
+				if(keyboard.getPress(50)){
+					buildWall(selectedColumn, selectedRow, WALL_OFFSET_UP);
+				}
+				if(keyboard.getPress(51)){
+					buildWall(selectedColumn, selectedRow, WALL_OFFSET_RIGHT);
+				}
+				if(keyboard.getPress(52)){
+					buildWall(selectedColumn, selectedRow, WALL_OFFSET_DOWN);
+				}
+
+				// SPACE to build floor
+				if(keyboard.getPress(32)){
+					buildRoom(selectedColumn, selectedRow);
+				}
+			}
+
+			// Print data on "s" press
+			if(keyboard.getPress(83)){
+				// Walls
+				console.log("var stageWalls = [");
+				for(w in wallList){
+					console.log("\tcreateWall(" + wallList[w].getCoords()[0] + ", " + wallList[w].getCoords()[1] + ", " + wallList[w].getOffset() + ", " + wallList[w].getType() + "),");
+				}
+				console.log("];");
+
+				// Rooms
+				console.log("function makeStageRooms(){");
+				for(r in roomList){
+					if(roomList[r].getType() === ROOM_TYPE_NORMAL){
+						console.log("\tbuildRoom(" + roomList[r].getCoords()[0] + ", " + roomList[r].getCoords()[1] + ");");
+					}
+				}
+				console.log("}");
+			}
+
+			keyboard.flushPressReleaseState();
+
+			drawScene();
+		};
+
+		function drawMesh(mesh, position, rotation){
+
+			mvPushMatrix();
+
+			mat4.translate(
+				mvMatrix,
+				mvMatrix,
+				position
+			);
+
+			mat4.rotate(
+				mvMatrix,
+				mvMatrix,
+				rotation[1],
+				[0.0, 1.0, 0.0]
+			);
+
+			gl.bindBuffer(gl.ARRAY_BUFFER, mesh.getVertexPositionBuffer());
+			gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, mesh.getVertexPositionBuffer().itemSize, gl.FLOAT, false, 0, 0);
+			gl.bindBuffer(gl.ARRAY_BUFFER, mesh.getVertexColorBuffer());
+			gl.vertexAttribPointer(shaderProgram.vertexColorAttribute, mesh.getVertexColorBuffer().itemSize, gl.FLOAT, false, 0, 0);
+			gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.getTriangleBuffer());
+
+			setMatrixUniforms();
+			gl.drawElements(gl.TRIANGLES, mesh.getTriangleBuffer().numItems, gl.UNSIGNED_SHORT, 0);
+			mvPopMatrix();
+
+		};
+
+		function drawRoom(row, column){
+
+			var room = getRoomAtCoords(column, row);
+
+			var centerPosition = [
+				(ROOM_WIDTH * column),
+				0.0,
+				(ROOM_WIDTH * row),
+			];
+				
+
+			// Floor
+			if(selectedRow === row && selectedColumn === column){
+
+				drawMesh(
+					floorHighlightMesh,
+					centerPosition,
+					[0.0, 0.0, 0.0]
+				);
+
+
+			}else if(room.getType() == ROOM_TYPE_NORMAL){
+				drawMesh(
+					floorMesh,
+					centerPosition,
+					[0.0, 0.0, 0.0]
+				);
+			}
+
+			// Special case for blank rooms
+			if(room.getType() == ROOM_TYPE_BLANK){
+				return;
+			}
+
+			return;
+
+
+		};
+
+		function drawWall(column, row, offset, type){
+
+			var centerPosition = [
+				(ROOM_WIDTH * column),
+				0.0,
+				(ROOM_WIDTH * row),
+			];
+			var position = centerPosition;
+			var rotation = [0.0, 0.0, 0.0];
+			var mesh = null;
+
+			// Left wall
+			if(offset === WALL_OFFSET_LEFT){
+				position = vectorAdd(centerPosition, [(ROOM_WIDTH * -0.5), 0.0, 0.0]);
+			}
+
+			// Back wall
+			if(offset === WALL_OFFSET_UP){
+				position = vectorAdd(centerPosition, [0.0, 0.0, (ROOM_WIDTH * -0.5)]);
+				rotation = [0.0, 1.57, 0.0];
+			}
+
+			// Right wall
+			if(offset === WALL_OFFSET_RIGHT){
+				position = vectorAdd(centerPosition, [(ROOM_WIDTH * 0.5), 0.0, 0.0]);
+			}
+
+			// Front wall
+			if(offset === WALL_OFFSET_DOWN){
+				position = vectorAdd(centerPosition, [0.0, 0.0, (ROOM_WIDTH * 0.5)]);
+				rotation = [0.0, 1.57, 0.0];
+			}
+
+			// Mesh
+			if(type === WALL_TYPE_NORMAL){
+				mesh = wallMesh;
+			}
+
+			if(type === WALL_TYPE_DOOR){
+				mesh = doorMesh;
+			}
+
+			// Draw
+			drawMesh(
+				mesh,
+				position,
+				rotation
+			);
+
+		};
+
+
+		function drawScene(){
+
+			gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+			mat4.identity(mvMatrix);
+
+			// Camera
+			mat4.translate(
+				mvMatrix,
+				mvMatrix,
+				cameraPosition
+			);
+
+			// Camera swivel
+			mat4.rotate(
+				mvMatrix,
+				mvMatrix,
+				swivelRotation[0],
+				[1.0, 0.0, 0.0]
+			);
+
+			mat4.rotate(
+				mvMatrix,
+				mvMatrix,
+				swivelRotation[1],
+				[0.0, 1.0, 0.0]
+			);
+
+			// Draw rooms
+			for(r in roomList){
+				drawRoom(
+					roomList[r].getCoords()[0],
+					roomList[r].getCoords()[1]
+				)
+			}
+
+			// Draw walls
+			for(w in wallList){
+				drawWall(
+					wallList[w].getCoords()[0],
+					wallList[w].getCoords()[1],
+					wallList[w].getOffset(),
+					wallList[w].getType()
+				)
+			}
+
+			// Draw units
+// 			drawMesh(unitMesh, [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [10.0, 0.0, 10.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [10.0, 0.0, -10.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [-10.0, 0.0, -10.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [-10.0, 0.0, 10.0], [0.0, 0.0, 0.0]);
+// 
+// 			var a = ROOM_WIDTH * 3;
+// 			var b = ROOM_WIDTH * 1;
+// 			drawMesh(unitMesh, [a, 0.0, b], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [a + 10.0, 0.0, b + 10.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [a - 10.0, 0.0, b - 10.0], [0.0, 0.0, 0.0]);
+// 
+// 			var c = ROOM_WIDTH * -2;
+// 			var d = ROOM_WIDTH * -4;
+// 			drawMesh(unitMesh, [c, 0.0, d], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [c, 0.0, d - 10.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [c, 0.0, d + 10.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [c - 10.0, 0.0, d + 10.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [c - 10.0, 0.0, d - 10.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [c + 10.0, 0.0, d + 10.0], [0.0, 0.0, 0.0]);
+// 			drawMesh(unitMesh, [c + 10.0, 0.0, d - 10.0], [0.0, 0.0, 0.0]);
+// 
+// 			var e = ROOM_WIDTH * -3;
+// 			drawMesh(unitMesh, [e, 0.0, 0.0], [0.0, 0.0, 0.0]);
+		};
+
+	</script>
+
+	<style>
+
+		body{
+			background-color: #444;
+		}
+
+		canvas{
+			position: fixed;
+			right: 0;
+			left: 0;
+			width: 800px;
+			height: 600px;
+			margin-left: auto;
+			margin-right: auto;
+		}
+
+	</style>
+
+</head>
+
+
+<body
+
+		onload="webGLStart()"
+		onmousemove="onMouseMove(event)"
+		onmousedown="onMouseDown(event)"
+		onmouseup="onMouseUp(event)"
+		onwheel="onMouseWheel(event)"
+
+		style="background-color:#444;"
+	>
+
+	<canvas id="canvas" width="800" height="600"></canvas>
+
+</body>
+
+
+</html>
