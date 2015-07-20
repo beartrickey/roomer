@@ -2,11 +2,11 @@ var units = (function(){
 
 	var unitList = [];
 
-	var createUnit = function(position, strength){
+	var createUnit = function(args){
 		unitList.push({
-			position: position,
+			position: args.position,
 			direction: [0.0, 0.0, 0.25],
-			strength: strength
+			strength: args.strength
 		});
 	};
 

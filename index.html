@@ -14,7 +14,7 @@
 	<script type="text/javascript" src="helper.js"></script>
 	<script type="text/javascript" src="point.js"></script>
 	<script type="text/javascript" src="keyboard.js"></script>
-	<script type="text/javascript" src="room.js"></script>
+	<script type="text/javascript" src="rooms.js"></script>
 	<script type="text/javascript" src="wall.js"></script>
 	<script type="text/javascript" src="mesh.js"></script>
 	<script type="text/javascript" src="wallMesh.js"></script>
@@ -255,7 +255,10 @@
 		// UNITS
 		// ============================================
 
-		units.createUnit([0.0, 0.0, 0.0], 1);
+		units.createUnit({
+			position: [0.0, 0.0, 0.0],
+			strength:  1
+		});
 
 		// ============================================
 		// ROOMS
