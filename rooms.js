@@ -1,6 +1,6 @@
 var rooms = (function(){
 
-	var createRoom = function(arg){
+	var createRoom = function(args){
 
 		var column = args.column;
 		var row = args.row;

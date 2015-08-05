@@ -22,7 +22,7 @@
 	<script type="text/javascript" src="floorMesh.js"></script>
 	<script type="text/javascript" src="floorHighlightMesh.js"></script>
 	<script type="text/javascript" src="unitMesh.js"></script>
-	<script type="text/javascript" src="units.js"></script>
+ 	<script type="text/javascript" src="units.js"></script>
 
 	<!-- STAGE DATA -->
 	<script type="text/javascript" src="stage_2.js"></script>
@@ -273,7 +273,11 @@
 
 			for(var r = 0; r < NUM_ROOMS; r++){
 
-				roomList[r] = createRoom(column, row, ROOM_TYPE_BLANK);
+				roomList[r] = rooms.createRoom({
+					column: column,
+					row: row,
+					type: ROOM_TYPE_BLANK
+				});
 				
 				column += 1;
 				if(column > MAX_GRID_LIMIT){
@@ -530,7 +534,7 @@
 
 		function drawRoom(row, column){
 
-			var room = getRoomAtCoords(column, row);
+			var room = rooms.getRoomAtCoords(column, row);
 
 			var centerPosition = [
 				(ROOM_WIDTH * column),
